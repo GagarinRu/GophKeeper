@@ -39,22 +39,13 @@ func ReadClientJSON(path string) (ClientJSON, error) {
 
 // ApplyClientJSON merges JSON values into options.
 func ApplyClientJSON(opts ClientOptions, file ClientJSON) (ClientOptions, error) {
-	if file.ServerURL != "" {
-		opts.ServerURL = file.ServerURL
-	}
-	if file.TokenFile != "" {
-		opts.TokenFile = file.TokenFile
-	}
-	if file.CacheFile != "" {
-		opts.CacheFile = file.CacheFile
-	}
-	if file.LogLevel != "" {
-		opts.LogLevel = file.LogLevel
-	}
-	if file.CryptoKey != "" {
-		opts.CryptoKeyPath = file.CryptoKey
-	}
-	return opts, nil
+	return applyOptions(opts,
+		nonEmptyStringOption(file.ServerURL, func(o *ClientOptions, v string) { o.ServerURL = v }),
+		nonEmptyStringOption(file.TokenFile, func(o *ClientOptions, v string) { o.TokenFile = v }),
+		nonEmptyStringOption(file.CacheFile, func(o *ClientOptions, v string) { o.CacheFile = v }),
+		nonEmptyStringOption(file.LogLevel, func(o *ClientOptions, v string) { o.LogLevel = v }),
+		nonEmptyStringOption(file.CryptoKey, func(o *ClientOptions, v string) { o.CryptoKeyPath = v }),
+	), nil
 }
 
 // ApplyClientEnv applies environment variables to client options.

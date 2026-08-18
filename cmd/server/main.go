@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rsa"
+	"errors"
 	"flag"
 	"net/http"
 	"os"
@@ -17,8 +18,6 @@ import (
 	"github.com/GagarinRu/gophkeeper/internal/handler"
 	"github.com/GagarinRu/gophkeeper/internal/logger"
 	"github.com/GagarinRu/gophkeeper/internal/storage"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
 )
@@ -31,11 +30,11 @@ func shutdownSignals() []os.Signal {
 	return sigs
 }
 
-func resolveDataKey(opts config.ServerOptions) []byte {
-	if opts.DataEncryptionKey != "" {
-		return crypto.KeyFromSecret(opts.DataEncryptionKey)
+func resolveDataKey(opts config.ServerOptions) ([]byte, error) {
+	if opts.DataEncryptionKey == "" {
+		return nil, errors.New("data encryption key is required (use -data-key or DATA_ENCRYPTION_KEY)")
 	}
-	return crypto.KeyFromSecret(opts.JWTSecret)
+	return crypto.KeyFromSecret(opts.DataEncryptionKey), nil
 }
 
 func main() {
@@ -106,7 +105,12 @@ func main() {
 		logger.Log.Fatal("Database DSN is required", zap.String("hint", "use -d or DATABASE_DSN"))
 	}
 
-	store, err := storage.NewPostgresStorage(opts.DatabaseDSN, resolveDataKey(opts))
+	encryptKey, err := resolveDataKey(opts)
+	if err != nil {
+		logger.Log.Fatal(err.Error())
+	}
+
+	store, err := storage.NewPostgresStorage(opts.DatabaseDSN, encryptKey)
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
 	}
@@ -120,7 +124,7 @@ func main() {
 		}
 	}
 
-	authService := auth.NewService(store, opts.JWTSecret)
+	authService := auth.NewService(store, opts.JWTSecret, auth.WithTokenTTL(opts.TokenTTL))
 	h := handler.NewHandler(store, authService, privateKey)
 
 	logger.Log.Info("Starting server",
@@ -128,33 +132,8 @@ func main() {
 		zap.String("database_dsn", opts.DatabaseDSN),
 	)
 
-	r := chi.NewRouter()
-	r.Use(middleware.StripSlashes)
-	r.Use(h.DecryptMiddleware)
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	r.Get("/ping", h.Ping)
-	r.Post("/api/register", h.Register)
-	r.Post("/api/login", h.Login)
-	r.Group(func(r chi.Router) {
-		r.Use(authService.RequireAuth)
-		r.Post("/api/secrets", h.CreateSecret)
-		r.Get("/api/secrets", h.ListSecrets)
-		r.Get("/api/sync", h.Sync)
-		r.Get("/api/secrets/{id}", func(w http.ResponseWriter, r *http.Request) {
-			h.GetSecret(w, r, chi.URLParam(r, "id"))
-		})
-		r.Put("/api/secrets/{id}", func(w http.ResponseWriter, r *http.Request) {
-			h.UpdateSecret(w, r, chi.URLParam(r, "id"))
-		})
-		r.Delete("/api/secrets/{id}", func(w http.ResponseWriter, r *http.Request) {
-			h.DeleteSecret(w, r, chi.URLParam(r, "id"))
-		})
-	})
-
-	server := &http.Server{Addr: opts.Address, Handler: logger.RequestLogger(r)}
+	mux := handler.NewMux(h, authService)
+	server := &http.Server{Addr: opts.Address, Handler: logger.RequestLogger(h.DecryptMiddleware(mux))}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("Server failed", zap.Error(err))

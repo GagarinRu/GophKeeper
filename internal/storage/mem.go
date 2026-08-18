@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"iter"
 	"sync"
 	"time"
 
@@ -13,10 +14,11 @@ import (
 
 // MemStorage is an in-memory Storage implementation for tests.
 type MemStorage struct {
-	mu         sync.RWMutex
-	users      map[string]*models.User
-	secrets    map[string]*models.Secret
-	encryptKey []byte
+	mu             sync.RWMutex
+	users          map[string]*models.User
+	secrets        map[string]*models.Secret
+	revokedTokens  map[string]time.Time
+	encryptKey     []byte
 }
 
 // NewMemStorage returns an empty in-memory storage.
@@ -27,9 +29,10 @@ func NewMemStorage() *MemStorage {
 // NewMemStorageWithKey returns in-memory storage with optional payload encryption.
 func NewMemStorageWithKey(encryptKey []byte) *MemStorage {
 	return &MemStorage{
-		users:      make(map[string]*models.User),
-		secrets:    make(map[string]*models.Secret),
-		encryptKey: encryptKey,
+		users:         make(map[string]*models.User),
+		secrets:       make(map[string]*models.Secret),
+		revokedTokens: make(map[string]time.Time),
+		encryptKey:    encryptKey,
 	}
 }
 
@@ -147,25 +150,39 @@ func (m *MemStorage) GetSecret(ctx context.Context, userID, secretID string) (*m
 }
 
 func (m *MemStorage) ListSecrets(ctx context.Context, userID string, secretType models.SecretType) ([]models.Secret, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	var out []models.Secret
-	for _, s := range m.secrets {
-		if s.UserID != userID || s.DeletedAt != nil {
-			continue
-		}
-		if secretType != "" && s.Type != secretType {
-			continue
-		}
-		cp := *s
-		payload, err := decodePayload(cp.Payload, m.encryptKey)
+	for secret, err := range m.ListSecretsSeq(ctx, userID, secretType) {
 		if err != nil {
 			return nil, err
 		}
-		cp.Payload = payload
-		out = append(out, cp)
+		out = append(out, secret)
 	}
 	return out, nil
+}
+
+func (m *MemStorage) ListSecretsSeq(ctx context.Context, userID string, secretType models.SecretType) iter.Seq2[models.Secret, error] {
+	return func(yield func(models.Secret, error) bool) {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		for _, s := range m.secrets {
+			if s.UserID != userID || s.DeletedAt != nil {
+				continue
+			}
+			if secretType != "" && s.Type != secretType {
+				continue
+			}
+			cp := *s
+			payload, err := decodePayload(cp.Payload, m.encryptKey)
+			if err != nil {
+				yield(models.Secret{}, err)
+				return
+			}
+			cp.Payload = payload
+			if !yield(cp, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (m *MemStorage) ListSecretsSince(ctx context.Context, userID string, since time.Time) ([]models.Secret, error) {
@@ -189,6 +206,26 @@ func (m *MemStorage) ListSecretsSince(ctx context.Context, userID string, since 
 
 func (m *MemStorage) Ping(ctx context.Context) error {
 	return nil
+}
+
+func (m *MemStorage) RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.revokedTokens[jti] = expiresAt
+	return nil
+}
+
+func (m *MemStorage) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	expiresAt, ok := m.revokedTokens[jti]
+	if !ok {
+		return false, nil
+	}
+	if time.Now().After(expiresAt) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (m *MemStorage) Close() error {

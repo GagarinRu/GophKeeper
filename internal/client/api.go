@@ -62,6 +62,11 @@ func (a *API) Login(email, password string) (string, error) {
 	return resp.Token, nil
 }
 
+// Logout revokes the current token on the server.
+func (a *API) Logout() error {
+	return a.doRequest(http.MethodPost, "/api/logout", nil, nil)
+}
+
 // CreateSecret creates a secret on the server.
 func (a *API) CreateSecret(secretType models.SecretType, name, metadata string, payload json.RawMessage) (*models.Secret, error) {
 	req := createSecretRequest{

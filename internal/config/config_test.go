@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/GagarinRu/gophkeeper/internal/config"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,14 @@ func TestApplyServerJSON(t *testing.T) {
 	require.Equal(t, "secret", merged.JWTSecret)
 	require.Equal(t, "debug", merged.LogLevel)
 	require.Equal(t, "/keys/private.pem", merged.CryptoKeyPath)
+}
+
+func TestApplyServerJSONTokenTTL(t *testing.T) {
+	opts := config.ServerOptions{TokenTTL: config.DefaultServerOptions().TokenTTL}
+	file := config.ServerJSON{TokenTTL: "2h"}
+	merged, err := config.ApplyServerJSON(opts, file)
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Hour, merged.TokenTTL)
 }
 
 func TestApplyServerEnv(t *testing.T) {

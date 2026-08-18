@@ -56,3 +56,21 @@ func parseDurationSeconds(raw string) (int, error) {
 	}
 	return 0, fmt.Errorf("invalid duration %q", raw)
 }
+
+// Option is a functional option for setting configuration values.
+type Option[T any] func(*T)
+
+func applyOptions[T any](base T, opts ...Option[T]) T {
+	for _, opt := range opts {
+		opt(&base)
+	}
+	return base
+}
+
+func nonEmptyStringOption[T any](value string, set func(*T, string)) Option[T] {
+	return func(t *T) {
+		if value != "" {
+			set(t, value)
+		}
+	}
+}

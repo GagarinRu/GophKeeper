@@ -69,7 +69,7 @@ func runCommand(cfg cliConfig, cmd string, args []string) int {
 	case "login":
 		return cmdLogin(api, cfg.TokenFile, args)
 	case "logout":
-		return cmdLogout(cfg.TokenFile, cfg.CacheFile)
+		return cmdLogout(api, cfg.TokenFile, cfg.CacheFile)
 	case "add":
 		return cmdAdd(api, args)
 	case "list":
@@ -135,7 +135,10 @@ func cmdLogin(api *client.API, tokenFile string, args []string) int {
 	return 0
 }
 
-func cmdLogout(tokenFile, cacheFile string) int {
+func cmdLogout(api *client.API, tokenFile, cacheFile string) int {
+	if err := api.Logout(); err != nil {
+		logger.Log.Warn("Server logout failed", zap.Error(err))
+	}
 	if err := os.Remove(tokenFile); err != nil && !os.IsNotExist(err) {
 		logger.Log.Error("Failed to remove token", zap.Error(err))
 		return 1

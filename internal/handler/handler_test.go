@@ -11,7 +11,6 @@ import (
 	"github.com/GagarinRu/gophkeeper/internal/handler"
 	"github.com/GagarinRu/gophkeeper/internal/models"
 	"github.com/GagarinRu/gophkeeper/internal/storage"
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,26 +18,7 @@ func newTestRouter() (*storage.MemStorage, *auth.Service, *httptest.Server) {
 	store := storage.NewMemStorage()
 	authSvc := auth.NewService(store, "test-secret")
 	h := handler.NewHandler(store, authSvc, nil)
-	r := chi.NewRouter()
-	r.Post("/api/register", h.Register)
-	r.Post("/api/login", h.Login)
-	r.Get("/ping", h.Ping)
-	r.Group(func(r chi.Router) {
-		r.Use(authSvc.RequireAuth)
-		r.Post("/api/secrets", h.CreateSecret)
-		r.Get("/api/secrets", h.ListSecrets)
-		r.Get("/api/sync", h.Sync)
-		r.Get("/api/secrets/{id}", func(w http.ResponseWriter, r *http.Request) {
-			h.GetSecret(w, r, chi.URLParam(r, "id"))
-		})
-		r.Put("/api/secrets/{id}", func(w http.ResponseWriter, r *http.Request) {
-			h.UpdateSecret(w, r, chi.URLParam(r, "id"))
-		})
-		r.Delete("/api/secrets/{id}", func(w http.ResponseWriter, r *http.Request) {
-			h.DeleteSecret(w, r, chi.URLParam(r, "id"))
-		})
-	})
-	return store, authSvc, httptest.NewServer(r)
+	return store, authSvc, httptest.NewServer(handler.NewMux(h, authSvc))
 }
 
 func TestHandlerRegisterLoginAndCreateSecret(t *testing.T) {
@@ -130,6 +110,32 @@ func TestHandlerSyncAndDelete(t *testing.T) {
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	_ = resp.Body.Close()
+}
+
+func TestHandlerLogoutRevokesToken(t *testing.T) {
+	_, authSvc, srv := newTestRouter()
+	defer srv.Close()
+
+	token := registerAndGetToken(t, srv.URL)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/logout", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	_ = resp.Body.Close()
+
+	_, err = authSvc.ValidateToken(req.Context(), token)
+	require.Error(t, err)
+
+	req, err = http.NewRequest(http.MethodGet, srv.URL+"/api/secrets", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	_ = resp.Body.Close()
 }
 

@@ -3,6 +3,7 @@ package storage
 
 import (
 	"context"
+	"iter"
 	"time"
 
 	"github.com/GagarinRu/gophkeeper/internal/models"
@@ -19,7 +20,11 @@ type Storage interface {
 	DeleteSecret(ctx context.Context, userID, secretID string) error
 	GetSecret(ctx context.Context, userID, secretID string) (*models.Secret, error)
 	ListSecrets(ctx context.Context, userID string, secretType models.SecretType) ([]models.Secret, error)
+	ListSecretsSeq(ctx context.Context, userID string, secretType models.SecretType) iter.Seq2[models.Secret, error]
 	ListSecretsSince(ctx context.Context, userID string, since time.Time) ([]models.Secret, error)
+
+	RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error
+	IsTokenRevoked(ctx context.Context, jti string) (bool, error)
 
 	Ping(ctx context.Context) error
 	Close() error

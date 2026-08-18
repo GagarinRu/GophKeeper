@@ -100,6 +100,20 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tokenResponse{Token: token})
 }
 
+// Logout handles POST /api/logout and revokes the current access token.
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	token, ok := auth.BearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return
+	}
+	if err := h.auth.Logout(r.Context(), token); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid token"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // CreateSecret handles POST /api/secrets and stores a new secret for the authenticated user.
 func (h *Handler) CreateSecret(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFromContext(r.Context())
@@ -155,7 +169,8 @@ func (h *Handler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetSecret handles GET /api/secrets/{id} and returns a single secret by ID.
-func (h *Handler) GetSecret(w http.ResponseWriter, r *http.Request, secretID string) {
+func (h *Handler) GetSecret(w http.ResponseWriter, r *http.Request) {
+	secretID := r.PathValue("id")
 	userID, ok := auth.UserIDFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
@@ -174,7 +189,8 @@ func (h *Handler) GetSecret(w http.ResponseWriter, r *http.Request, secretID str
 }
 
 // UpdateSecret handles PUT /api/secrets/{id} and updates an existing secret.
-func (h *Handler) UpdateSecret(w http.ResponseWriter, r *http.Request, secretID string) {
+func (h *Handler) UpdateSecret(w http.ResponseWriter, r *http.Request) {
+	secretID := r.PathValue("id")
 	userID, ok := auth.UserIDFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
@@ -238,7 +254,8 @@ func (h *Handler) UpdateSecret(w http.ResponseWriter, r *http.Request, secretID 
 }
 
 // DeleteSecret handles DELETE /api/secrets/{id} and soft-deletes a secret.
-func (h *Handler) DeleteSecret(w http.ResponseWriter, r *http.Request, secretID string) {
+func (h *Handler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
+	secretID := r.PathValue("id")
 	userID, ok := auth.UserIDFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
