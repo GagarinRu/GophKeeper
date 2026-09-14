@@ -19,6 +19,7 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), UserIDKey, userID)
+		ctx = context.WithValue(ctx, TokenKey, token)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

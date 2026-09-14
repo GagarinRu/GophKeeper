@@ -40,7 +40,10 @@ func resolveDataKey(opts config.ServerOptions) ([]byte, error) {
 func main() {
 	printBuildInfo()
 
-	opts := config.DefaultServerOptions()
+	opts, err := config.DefaultServerOptions()
+	if err != nil {
+		panic("failed to load default config: " + err.Error())
+	}
 
 	if configPath := config.ConfigPath(); configPath != "" {
 		file, err := config.ReadServerJSON(configPath)
@@ -94,7 +97,10 @@ func main() {
 		opts.CryptoKeyPath = cryptoKey
 	}
 
-	opts = config.ApplyServerEnv(opts)
+	opts, err = config.ApplyServerEnv(opts)
+	if err != nil {
+		panic("invalid server configuration: " + err.Error())
+	}
 
 	if err := logger.Initialize(opts.LogLevel); err != nil {
 		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))

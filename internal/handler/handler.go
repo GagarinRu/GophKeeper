@@ -102,7 +102,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 // Logout handles POST /api/logout and revokes the current access token.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	token, ok := auth.BearerToken(r.Header.Get("Authorization"))
+	token, ok := auth.TokenFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
 		return
@@ -160,7 +160,7 @@ func (h *Handler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid secret type"})
 		return
 	}
-	secrets, err := h.storage.ListSecrets(r.Context(), userID, secretType)
+	secrets, err := storage.ListSecrets(r.Context(), h.storage, userID, secretType)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list secrets"})
 		return

@@ -149,17 +149,6 @@ func (m *MemStorage) GetSecret(ctx context.Context, userID, secretID string) (*m
 	return &cp, nil
 }
 
-func (m *MemStorage) ListSecrets(ctx context.Context, userID string, secretType models.SecretType) ([]models.Secret, error) {
-	var out []models.Secret
-	for secret, err := range m.ListSecretsSeq(ctx, userID, secretType) {
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, secret)
-	}
-	return out, nil
-}
-
 func (m *MemStorage) ListSecretsSeq(ctx context.Context, userID string, secretType models.SecretType) iter.Seq2[models.Secret, error] {
 	return func(yield func(models.Secret, error) bool) {
 		m.mu.RLock()
@@ -226,6 +215,19 @@ func (m *MemStorage) IsTokenRevoked(ctx context.Context, jti string) (bool, erro
 		return false, nil
 	}
 	return true, nil
+}
+
+func (m *MemStorage) ListRevokedTokens(ctx context.Context) (map[string]time.Time, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]time.Time)
+	now := time.Now()
+	for jti, expiresAt := range m.revokedTokens {
+		if now.Before(expiresAt) {
+			out[jti] = expiresAt
+		}
+	}
+	return out, nil
 }
 
 func (m *MemStorage) Close() error {

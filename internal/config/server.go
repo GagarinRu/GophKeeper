@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -44,28 +45,35 @@ func ReadServerJSON(path string) (ServerJSON, error) {
 	return file, nil
 }
 
+func tokenTTLOption(value string) Option[ServerOptions] {
+	return func(o *ServerOptions) error {
+		if value == "" {
+			return nil
+		}
+		secs, err := parseDurationSeconds(value)
+		if err != nil {
+			return err
+		}
+		o.TokenTTL = time.Duration(secs) * time.Second
+		return nil
+	}
+}
+
 // ApplyServerJSON merges JSON values into options.
 func ApplyServerJSON(opts ServerOptions, file ServerJSON) (ServerOptions, error) {
-	opts = applyOptions(opts,
+	return applyOptions(opts,
 		nonEmptyStringOption(file.Address, func(o *ServerOptions, v string) { o.Address = v }),
 		nonEmptyStringOption(file.DatabaseDSN, func(o *ServerOptions, v string) { o.DatabaseDSN = v }),
 		nonEmptyStringOption(file.JWTSecret, func(o *ServerOptions, v string) { o.JWTSecret = v }),
 		nonEmptyStringOption(file.DataEncryptionKey, func(o *ServerOptions, v string) { o.DataEncryptionKey = v }),
 		nonEmptyStringOption(file.LogLevel, func(o *ServerOptions, v string) { o.LogLevel = v }),
 		nonEmptyStringOption(file.CryptoKey, func(o *ServerOptions, v string) { o.CryptoKeyPath = v }),
+		tokenTTLOption(file.TokenTTL),
 	)
-	if file.TokenTTL != "" {
-		secs, err := parseDurationSeconds(file.TokenTTL)
-		if err != nil {
-			return opts, err
-		}
-		opts.TokenTTL = time.Duration(secs) * time.Second
-	}
-	return opts, nil
 }
 
 // ApplyServerEnv applies environment variables to server options.
-func ApplyServerEnv(opts ServerOptions) ServerOptions {
+func ApplyServerEnv(opts ServerOptions) (ServerOptions, error) {
 	opts.Address = envString("ADDRESS", opts.Address)
 	opts.DatabaseDSN = envString("DATABASE_DSN", opts.DatabaseDSN)
 	opts.JWTSecret = envString("JWT_SECRET", opts.JWTSecret)
@@ -73,16 +81,18 @@ func ApplyServerEnv(opts ServerOptions) ServerOptions {
 	opts.LogLevel = envString("LOG_LEVEL", opts.LogLevel)
 	opts.CryptoKeyPath = envString("CRYPTO_KEY", opts.CryptoKeyPath)
 	if raw := envString("TOKEN_TTL", ""); raw != "" {
-		if secs, err := parseDurationSeconds(raw); err == nil {
-			opts.TokenTTL = time.Duration(secs) * time.Second
+		secs, err := parseDurationSeconds(raw)
+		if err != nil {
+			return opts, fmt.Errorf("TOKEN_TTL: %w", err)
 		}
+		opts.TokenTTL = time.Duration(secs) * time.Second
 	}
-	return opts
+	return opts, nil
 }
 
 // DefaultServerOptions returns server options from environment with code fallbacks.
 // Env: ADDRESS, DATABASE_DSN, JWT_SECRET, DATA_ENCRYPTION_KEY, LOG_LEVEL, CRYPTO_KEY, TOKEN_TTL.
-func DefaultServerOptions() ServerOptions {
+func DefaultServerOptions() (ServerOptions, error) {
 	opts := ServerOptions{
 		Address:   defaultServerAddress,
 		LogLevel:  defaultServerLogLevel,

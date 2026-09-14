@@ -45,7 +45,7 @@ func ApplyClientJSON(opts ClientOptions, file ClientJSON) (ClientOptions, error)
 		nonEmptyStringOption(file.CacheFile, func(o *ClientOptions, v string) { o.CacheFile = v }),
 		nonEmptyStringOption(file.LogLevel, func(o *ClientOptions, v string) { o.LogLevel = v }),
 		nonEmptyStringOption(file.CryptoKey, func(o *ClientOptions, v string) { o.CryptoKeyPath = v }),
-	), nil
+	)
 }
 
 // ApplyClientEnv applies environment variables to client options.

@@ -15,7 +15,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const defaultTokenTTL = 24 * time.Hour
+const (
+	defaultTokenTTL             = 24 * time.Hour
+	revokedTokenRefreshInterval = 5 * time.Minute
+)
 
 // contextKey is used for request context values.
 type contextKey string
@@ -23,11 +26,15 @@ type contextKey string
 // UserIDKey is the context key for the authenticated user ID.
 const UserIDKey contextKey = "userID"
 
+// TokenKey is the context key for the validated bearer token.
+const TokenKey contextKey = "token"
+
 // Service handles registration, login, and token validation.
 type Service struct {
-	store     storage.Storage
-	jwtSecret []byte
-	tokenTTL  time.Duration
+	store        storage.Storage
+	jwtSecret    []byte
+	tokenTTL     time.Duration
+	revokedCache *revokedTokenCache
 }
 
 // ServiceOption configures an auth service.
@@ -45,14 +52,33 @@ func WithTokenTTL(ttl time.Duration) ServiceOption {
 // NewService creates an auth service with the given JWT secret.
 func NewService(store storage.Storage, jwtSecret string, opts ...ServiceOption) *Service {
 	s := &Service{
-		store:     store,
-		jwtSecret: []byte(jwtSecret),
-		tokenTTL:  defaultTokenTTL,
+		store:        store,
+		jwtSecret:    []byte(jwtSecret),
+		tokenTTL:     defaultTokenTTL,
+		revokedCache: newRevokedTokenCache(),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.refreshRevokedCache(context.Background())
+	go s.runRevokedCacheRefresh()
 	return s
+}
+
+func (s *Service) runRevokedCacheRefresh() {
+	ticker := time.NewTicker(revokedTokenRefreshInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.refreshRevokedCache(context.Background())
+	}
+}
+
+func (s *Service) refreshRevokedCache(ctx context.Context) {
+	tokens, err := s.store.ListRevokedTokens(ctx)
+	if err != nil {
+		return
+	}
+	s.revokedCache.replace(tokens)
 }
 
 type claims struct {
@@ -113,7 +139,11 @@ func (s *Service) Logout(ctx context.Context, tokenStr string) error {
 	if claims.ID == "" || claims.ExpiresAt == nil {
 		return errors.New("invalid token")
 	}
-	return s.store.RevokeToken(ctx, claims.ID, claims.ExpiresAt.Time)
+	if err := s.store.RevokeToken(ctx, claims.ID, claims.ExpiresAt.Time); err != nil {
+		return err
+	}
+	s.revokedCache.add(claims.ID, claims.ExpiresAt.Time)
+	return nil
 }
 
 // ValidateToken parses a JWT and returns the user ID.
@@ -125,11 +155,7 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (string, e
 	if claims.UserID == "" {
 		return "", errors.New("invalid token")
 	}
-	revoked, err := s.store.IsTokenRevoked(ctx, claims.ID)
-	if err != nil {
-		return "", err
-	}
-	if revoked {
+	if s.revokedCache.isRevoked(claims.ID) {
 		return "", errors.New("invalid token")
 	}
 	return claims.UserID, nil
@@ -181,4 +207,10 @@ func BearerToken(header string) (string, bool) {
 func UserIDFromContext(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(UserIDKey).(string)
 	return id, ok && id != ""
+}
+
+// TokenFromContext returns the validated bearer token from context.
+func TokenFromContext(ctx context.Context) (string, bool) {
+	token, ok := ctx.Value(TokenKey).(string)
+	return token, ok && token != ""
 }
