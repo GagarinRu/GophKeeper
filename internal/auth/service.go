@@ -5,15 +5,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/GagarinRu/gophkeeper/internal/models"
 	"github.com/GagarinRu/gophkeeper/internal/storage"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
-const defaultTokenTTL = 24 * time.Hour
+const (
+	defaultTokenTTL             = 24 * time.Hour
+	revokedTokenRefreshInterval = 5 * time.Minute
+)
 
 // contextKey is used for request context values.
 type contextKey string
@@ -21,20 +26,59 @@ type contextKey string
 // UserIDKey is the context key for the authenticated user ID.
 const UserIDKey contextKey = "userID"
 
+// TokenKey is the context key for the validated bearer token.
+const TokenKey contextKey = "token"
+
 // Service handles registration, login, and token validation.
 type Service struct {
-	store     storage.Storage
-	jwtSecret []byte
-	tokenTTL  time.Duration
+	store        storage.Storage
+	jwtSecret    []byte
+	tokenTTL     time.Duration
+	revokedCache *revokedTokenCache
+}
+
+// ServiceOption configures an auth service.
+type ServiceOption func(*Service)
+
+// WithTokenTTL sets the JWT lifetime.
+func WithTokenTTL(ttl time.Duration) ServiceOption {
+	return func(s *Service) {
+		if ttl > 0 {
+			s.tokenTTL = ttl
+		}
+	}
 }
 
 // NewService creates an auth service with the given JWT secret.
-func NewService(store storage.Storage, jwtSecret string) *Service {
-	return &Service{
-		store:     store,
-		jwtSecret: []byte(jwtSecret),
-		tokenTTL:  defaultTokenTTL,
+func NewService(store storage.Storage, jwtSecret string, opts ...ServiceOption) *Service {
+	s := &Service{
+		store:        store,
+		jwtSecret:    []byte(jwtSecret),
+		tokenTTL:     defaultTokenTTL,
+		revokedCache: newRevokedTokenCache(),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	s.refreshRevokedCache(context.Background())
+	go s.runRevokedCacheRefresh()
+	return s
+}
+
+func (s *Service) runRevokedCacheRefresh() {
+	ticker := time.NewTicker(revokedTokenRefreshInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.refreshRevokedCache(context.Background())
+	}
+}
+
+func (s *Service) refreshRevokedCache(ctx context.Context) {
+	tokens, err := s.store.ListRevokedTokens(ctx)
+	if err != nil {
+		return
+	}
+	s.revokedCache.replace(tokens)
 }
 
 type claims struct {
@@ -86,8 +130,38 @@ func (s *Service) Login(ctx context.Context, email, password string) (string, *m
 	return token, user, nil
 }
 
+// Logout revokes the given access token.
+func (s *Service) Logout(ctx context.Context, tokenStr string) error {
+	claims, err := s.parseClaims(tokenStr)
+	if err != nil {
+		return err
+	}
+	if claims.ID == "" || claims.ExpiresAt == nil {
+		return errors.New("invalid token")
+	}
+	if err := s.store.RevokeToken(ctx, claims.ID, claims.ExpiresAt.Time); err != nil {
+		return err
+	}
+	s.revokedCache.add(claims.ID, claims.ExpiresAt.Time)
+	return nil
+}
+
 // ValidateToken parses a JWT and returns the user ID.
-func (s *Service) ValidateToken(tokenStr string) (string, error) {
+func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (string, error) {
+	claims, err := s.parseClaims(tokenStr)
+	if err != nil {
+		return "", err
+	}
+	if claims.UserID == "" {
+		return "", errors.New("invalid token")
+	}
+	if s.revokedCache.isRevoked(claims.ID) {
+		return "", errors.New("invalid token")
+	}
+	return claims.UserID, nil
+}
+
+func (s *Service) parseClaims(tokenStr string) (*claims, error) {
 	claims := &claims{}
 	token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -96,12 +170,9 @@ func (s *Service) ValidateToken(tokenStr string) (string, error) {
 		return s.jwtSecret, nil
 	})
 	if err != nil || !token.Valid {
-		return "", errors.New("invalid token")
+		return nil, errors.New("invalid token")
 	}
-	if claims.UserID == "" {
-		return "", errors.New("invalid token")
-	}
-	return claims.UserID, nil
+	return claims, nil
 }
 
 func (s *Service) issueToken(user *models.User) (string, error) {
@@ -110,6 +181,7 @@ func (s *Service) issueToken(user *models.User) (string, error) {
 		UserID: user.ID,
 		Email:  user.Email,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.tokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
@@ -118,8 +190,27 @@ func (s *Service) issueToken(user *models.User) (string, error) {
 	return token.SignedString(s.jwtSecret)
 }
 
+// BearerToken extracts the token from an Authorization header.
+func BearerToken(header string) (string, bool) {
+	if header == "" {
+		return "", false
+	}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return "", false
+	}
+	token := strings.TrimSpace(parts[1])
+	return token, token != ""
+}
+
 // UserIDFromContext returns the authenticated user ID from context.
 func UserIDFromContext(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(UserIDKey).(string)
 	return id, ok && id != ""
+}
+
+// TokenFromContext returns the validated bearer token from context.
+func TokenFromContext(ctx context.Context) (string, bool) {
+	token, ok := ctx.Value(TokenKey).(string)
+	return token, ok && token != ""
 }

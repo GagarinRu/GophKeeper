@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"iter"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/GagarinRu/gophkeeper/internal/logger"
@@ -32,7 +32,6 @@ const (
 // PostgresStorage stores users and secrets in PostgreSQL.
 type PostgresStorage struct {
 	db         *sql.DB
-	mu         sync.Mutex
 	encryptKey []byte
 }
 
@@ -280,7 +279,7 @@ func (ps *PostgresStorage) GetSecret(ctx context.Context, userID, secretID strin
 	return &secret, nil
 }
 
-func (ps *PostgresStorage) ListSecrets(ctx context.Context, userID string, secretType models.SecretType) ([]models.Secret, error) {
+func (ps *PostgresStorage) ListSecretsSeq(ctx context.Context, userID string, secretType models.SecretType) iter.Seq2[models.Secret, error] {
 	query := `SELECT id, user_id, type, name, metadata, payload, version, created_at, updated_at, deleted_at
 		FROM secrets WHERE user_id = $1 AND deleted_at IS NULL`
 	args := []any{userID}
@@ -290,12 +289,19 @@ func (ps *PostgresStorage) ListSecrets(ctx context.Context, userID string, secre
 	}
 	query += ` ORDER BY updated_at DESC`
 
-	rows, err := ps.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
+	return func(yield func(models.Secret, error) bool) {
+		rows, err := ps.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			yield(models.Secret{}, err)
+			return
+		}
+		defer func() { _ = rows.Close() }()
+		for secret, err := range ps.iterateSecretRows(rows) {
+			if !yield(secret, err) {
+				return
+			}
+		}
 	}
-	defer func() { _ = rows.Close() }()
-	return ps.scanSecrets(rows)
 }
 
 func (ps *PostgresStorage) ListSecretsSince(ctx context.Context, userID string, since time.Time) ([]models.Secret, error) {
@@ -309,31 +315,91 @@ func (ps *PostgresStorage) ListSecretsSince(ctx context.Context, userID string, 
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	return ps.scanSecrets(rows)
-}
-
-func (ps *PostgresStorage) scanSecrets(rows *sql.Rows) ([]models.Secret, error) {
 	var secrets []models.Secret
-	for rows.Next() {
-		var secret models.Secret
-		var deletedAt sql.NullTime
-		if err := rows.Scan(
-			&secret.ID, &secret.UserID, &secret.Type, &secret.Name, &secret.Metadata,
-			&secret.Payload, &secret.Version, &secret.CreatedAt, &secret.UpdatedAt, &deletedAt,
-		); err != nil {
+	for secret, err := range ps.iterateSecretRows(rows) {
+		if err != nil {
 			return nil, err
 		}
-		if deletedAt.Valid {
-			secret.DeletedAt = &deletedAt.Time
-		}
-		payload, decErr := decodePayload(secret.Payload, ps.encryptKey)
-		if decErr != nil {
-			return nil, decErr
-		}
-		secret.Payload = payload
 		secrets = append(secrets, secret)
 	}
-	return secrets, rows.Err()
+	return secrets, nil
+}
+
+func (ps *PostgresStorage) iterateSecretRows(rows *sql.Rows) iter.Seq2[models.Secret, error] {
+	return func(yield func(models.Secret, error) bool) {
+		for rows.Next() {
+			var secret models.Secret
+			var deletedAt sql.NullTime
+			if err := rows.Scan(
+				&secret.ID, &secret.UserID, &secret.Type, &secret.Name, &secret.Metadata,
+				&secret.Payload, &secret.Version, &secret.CreatedAt, &secret.UpdatedAt, &deletedAt,
+			); err != nil {
+				yield(models.Secret{}, err)
+				return
+			}
+			if deletedAt.Valid {
+				secret.DeletedAt = &deletedAt.Time
+			}
+			payload, err := decodePayload(secret.Payload, ps.encryptKey)
+			if err != nil {
+				yield(models.Secret{}, err)
+				return
+			}
+			secret.Payload = payload
+			if !yield(secret, nil) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			yield(models.Secret{}, err)
+		}
+	}
+}
+
+func (ps *PostgresStorage) RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error {
+	return ps.executeWithRetry(ctx, func() error {
+		_, err := ps.db.ExecContext(ctx,
+			`INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2)
+			 ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at`,
+			jti, expiresAt,
+		)
+		return err
+	})
+}
+
+func (ps *PostgresStorage) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
+	var exists bool
+	err := ps.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM revoked_tokens WHERE jti = $1 AND expires_at > NOW())`,
+		jti,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (ps *PostgresStorage) ListRevokedTokens(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := ps.db.QueryContext(ctx,
+		`SELECT jti, expires_at FROM revoked_tokens WHERE expires_at > NOW()`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	tokens := make(map[string]time.Time)
+	for rows.Next() {
+		var jti string
+		var expiresAt time.Time
+		if err := rows.Scan(&jti, &expiresAt); err != nil {
+			return nil, err
+		}
+		tokens[jti] = expiresAt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tokens, nil
 }
 
 func (ps *PostgresStorage) Ping(ctx context.Context) error {

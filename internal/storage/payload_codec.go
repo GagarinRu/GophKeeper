@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/GagarinRu/gophkeeper/internal/crypto"
 )
@@ -23,11 +24,11 @@ func decodePayload(stored json.RawMessage, key []byte) (json.RawMessage, error) 
 	}
 	var enc string
 	if err := json.Unmarshal(stored, &enc); err != nil {
-		return stored, nil
+		return nil, fmt.Errorf("decode payload envelope: %w", err)
 	}
 	plain, err := crypto.DecryptAES(enc, key)
 	if err != nil {
-		return stored, nil
+		return nil, fmt.Errorf("decrypt payload: %w", err)
 	}
 	return json.RawMessage(plain), nil
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/GagarinRu/gophkeeper/internal/config"
 	"github.com/stretchr/testify/require"
@@ -30,15 +31,33 @@ func TestApplyServerJSON(t *testing.T) {
 	require.Equal(t, "/keys/private.pem", merged.CryptoKeyPath)
 }
 
+func TestApplyServerJSONTokenTTL(t *testing.T) {
+	defaults, err := config.DefaultServerOptions()
+	require.NoError(t, err)
+	opts := config.ServerOptions{TokenTTL: defaults.TokenTTL}
+	file := config.ServerJSON{TokenTTL: "2h"}
+	merged, err := config.ApplyServerJSON(opts, file)
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Hour, merged.TokenTTL)
+}
+
 func TestApplyServerEnv(t *testing.T) {
 	opts := config.ServerOptions{}
 	t.Setenv("ADDRESS", "localhost:3000")
 	t.Setenv("JWT_SECRET", "from-env")
 	t.Setenv("DATABASE_DSN", "postgres://env/db")
-	merged := config.ApplyServerEnv(opts)
+	merged, err := config.ApplyServerEnv(opts)
+	require.NoError(t, err)
 	require.Equal(t, "localhost:3000", merged.Address)
 	require.Equal(t, "from-env", merged.JWTSecret)
 	require.Equal(t, "postgres://env/db", merged.DatabaseDSN)
+}
+
+func TestApplyServerEnvInvalidTokenTTL(t *testing.T) {
+	t.Setenv("TOKEN_TTL", "not-a-duration")
+	_, err := config.ApplyServerEnv(config.ServerOptions{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "TOKEN_TTL")
 }
 
 func TestReadServerJSONFromFile(t *testing.T) {
@@ -100,7 +119,8 @@ func TestDefaultClientOptions(t *testing.T) {
 func TestDefaultServerOptions(t *testing.T) {
 	t.Setenv("ADDRESS", ":9000")
 	t.Setenv("JWT_SECRET", "env-secret")
-	opts := config.DefaultServerOptions()
+	opts, err := config.DefaultServerOptions()
+	require.NoError(t, err)
 	require.Equal(t, ":9000", opts.Address)
 	require.Equal(t, "env-secret", opts.JWTSecret)
 }

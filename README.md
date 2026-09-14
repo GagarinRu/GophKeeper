@@ -3,7 +3,6 @@
 ![Go](https://img.shields.io/badge/Go-1.25-blue?logo=go)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-orange?logo=postgresql)
 ![Docker](https://img.shields.io/badge/Docker-Compose-blue?logo=docker)
-![Chi](https://img.shields.io/badge/Chi-router-green?logo=go)
 ![JWT](https://img.shields.io/badge/JWT-authentication-yellow?logo=jsonwebtokens)
 ![AES-GCM](https://img.shields.io/badge/encryption-AES_GCM-purple)
 
@@ -37,7 +36,7 @@ GophKeeper — клиент-серверная система для надёж�
 
 - **Go** — сервер и CLI-клиент.
 - **PostgreSQL** — персистентное хранение пользователей и секретов.
-- **Chi** — HTTP router и middleware.
+- **net/http ServeMux** — HTTP router (Go 1.22+, method-based routing).
 - **golang-migrate** — миграции схемы БД.
 - **JWT** — аутентификация API-запросов.
 - **bcrypt** — хеширование паролей.
@@ -91,7 +90,7 @@ cd gophkeeper
 cp .env.example .env
 ```
 
-Файл `.env` нужен для `docker compose` (учётные данные БД). Go-приложения **не читают `.env` автоматически** — сервер запускается flags (`-d`, `-jwt-secret`), клиент работает **без `.env`** (дефолты: `http://localhost:8080`, token/cache в `%USERPROFILE%\.gophkeeper\`).
+Файл `.env` нужен для `docker compose` (учётные данные БД). Go-приложения **не читают `.env` автоматически** — сервер запускается flags (`-d`, `-jwt-secret`, `-data-key`), клиент работает **без `.env`** (дефолты: `http://localhost:8080`, token/cache в `%USERPROFILE%\.gophkeeper\`).
 
 ### 2. Запуск PostgreSQL
 
@@ -106,7 +105,9 @@ docker compose up -d
 ```bash
 go run ./cmd/server \
   -a :8080 \
-  -d "postgres://gophkeeper:gophkeeper@localhost:5432/gophkeeper?sslmode=disable"
+  -d "postgres://gophkeeper:gophkeeper@localhost:5432/gophkeeper?sslmode=disable" \
+  -jwt-secret "change-me-in-production" \
+  -data-key "change-me-data-key"
 ```
 
 Параметры сервера:
@@ -116,7 +117,8 @@ go run ./cmd/server \
 | `ADDRESS` | `-a` | Адрес HTTP-сервера |
 | `DATABASE_DSN` | `-d` | DSN PostgreSQL (обязательный) |
 | `JWT_SECRET` | `-jwt-secret` | Секрет для JWT |
-| `DATA_ENCRYPTION_KEY` | `-data-key` | Ключ шифрования payload (32 байт или строка) |
+| `DATA_ENCRYPTION_KEY` | `-data-key` | Ключ шифрования payload (обязательный, отдельно от JWT) |
+| `TOKEN_TTL` | — | Время жизни JWT (`24h`, `3600s` и т.д., по умолчанию 24h) |
 | `LOG_LEVEL` | `-l` | Уровень логирования |
 | `CRYPTO_KEY` | `-crypto-key` | Путь к приватному RSA-ключу (transport) |
 
@@ -171,7 +173,7 @@ go run ./cmd/client list
 | `version` | Версия, дата и commit сборки |
 | `register --email --password` | Регистрация |
 | `login --email --password` | Вход, сохранение token |
-| `logout` | Удаление token и кэша |
+| `logout` | Выход: отзыв token на сервере, удаление token и кэша |
 | `add login` | Логин/пароль (`--name`, `--login`, `--password`, `--url`, `--metadata`) |
 | `add text` | Текст (`--name`, `--content`, `--metadata`) |
 | `add binary` | Бинарные данные (`--name`, `--file`, `--metadata`) |
@@ -188,12 +190,14 @@ go run ./cmd/client list
 |-------|------|------|----------|
 | POST | `/api/register` | нет | Регистрация `{"email","password"}` → `{"token"}` |
 | POST | `/api/login` | нет | Вход → `{"token"}` |
+| POST | `/api/logout` | Bearer | Отзыв текущего token |
 | POST | `/api/secrets` | Bearer | Создать секрет |
 | GET | `/api/secrets?type=` | Bearer | Список секретов |
 | GET | `/api/secrets/{id}` | Bearer | Один секрет |
 | PUT | `/api/secrets/{id}` | Bearer | Обновить секрет |
 | DELETE | `/api/secrets/{id}` | Bearer | Удалить секрет (soft delete) |
 | GET | `/api/sync?since=` | Bearer | Изменения с момента RFC3339 |
+| GET | `/health` | нет | Проверка доступности сервера |
 | GET | `/ping` | нет | Проверка доступности БД |
 
 ## Пример использования

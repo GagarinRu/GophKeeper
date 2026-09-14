@@ -38,7 +38,7 @@ func TestMemStorage_UserAndSecretCRUD(t *testing.T) {
 	}
 	require.NoError(t, store.CreateSecret(ctx, secret))
 
-	list, err := store.ListSecrets(ctx, user.ID, "")
+	list, err := storage.ListSecrets(ctx, store, user.ID, "")
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 

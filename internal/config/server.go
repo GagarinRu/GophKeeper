@@ -1,15 +1,19 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
-	defaultServerAddress = ":8080"
+	defaultServerAddress  = ":8080"
 	defaultServerLogLevel = "info"
 	defaultJWTSecret      = "dev-secret-change-me"
+	defaultTokenTTL       = 24 * time.Hour
 )
+
 // ServerJSON is the JSON config format for the GophKeeper server.
 type ServerJSON struct {
 	Address           string `json:"address"`
@@ -18,6 +22,7 @@ type ServerJSON struct {
 	DataEncryptionKey string `json:"data_encryption_key"`
 	LogLevel          string `json:"log_level"`
 	CryptoKey         string `json:"crypto_key"`
+	TokenTTL          string `json:"token_ttl"`
 }
 
 // ServerOptions holds resolved server configuration.
@@ -28,6 +33,7 @@ type ServerOptions struct {
 	DataEncryptionKey string
 	LogLevel          string
 	CryptoKeyPath     string
+	TokenTTL          time.Duration
 }
 
 // ReadServerJSON loads server configuration from a JSON file.
@@ -39,47 +45,59 @@ func ReadServerJSON(path string) (ServerJSON, error) {
 	return file, nil
 }
 
+func tokenTTLOption(value string) Option[ServerOptions] {
+	return func(o *ServerOptions) error {
+		if value == "" {
+			return nil
+		}
+		secs, err := parseDurationSeconds(value)
+		if err != nil {
+			return err
+		}
+		o.TokenTTL = time.Duration(secs) * time.Second
+		return nil
+	}
+}
+
 // ApplyServerJSON merges JSON values into options.
 func ApplyServerJSON(opts ServerOptions, file ServerJSON) (ServerOptions, error) {
-	if file.Address != "" {
-		opts.Address = file.Address
-	}
-	if file.DatabaseDSN != "" {
-		opts.DatabaseDSN = file.DatabaseDSN
-	}
-	if file.JWTSecret != "" {
-		opts.JWTSecret = file.JWTSecret
-	}
-	if file.DataEncryptionKey != "" {
-		opts.DataEncryptionKey = file.DataEncryptionKey
-	}
-	if file.LogLevel != "" {
-		opts.LogLevel = file.LogLevel
-	}
-	if file.CryptoKey != "" {
-		opts.CryptoKeyPath = file.CryptoKey
-	}
-	return opts, nil
+	return applyOptions(opts,
+		nonEmptyStringOption(file.Address, func(o *ServerOptions, v string) { o.Address = v }),
+		nonEmptyStringOption(file.DatabaseDSN, func(o *ServerOptions, v string) { o.DatabaseDSN = v }),
+		nonEmptyStringOption(file.JWTSecret, func(o *ServerOptions, v string) { o.JWTSecret = v }),
+		nonEmptyStringOption(file.DataEncryptionKey, func(o *ServerOptions, v string) { o.DataEncryptionKey = v }),
+		nonEmptyStringOption(file.LogLevel, func(o *ServerOptions, v string) { o.LogLevel = v }),
+		nonEmptyStringOption(file.CryptoKey, func(o *ServerOptions, v string) { o.CryptoKeyPath = v }),
+		tokenTTLOption(file.TokenTTL),
+	)
 }
 
 // ApplyServerEnv applies environment variables to server options.
-func ApplyServerEnv(opts ServerOptions) ServerOptions {
+func ApplyServerEnv(opts ServerOptions) (ServerOptions, error) {
 	opts.Address = envString("ADDRESS", opts.Address)
 	opts.DatabaseDSN = envString("DATABASE_DSN", opts.DatabaseDSN)
 	opts.JWTSecret = envString("JWT_SECRET", opts.JWTSecret)
 	opts.DataEncryptionKey = envString("DATA_ENCRYPTION_KEY", opts.DataEncryptionKey)
 	opts.LogLevel = envString("LOG_LEVEL", opts.LogLevel)
 	opts.CryptoKeyPath = envString("CRYPTO_KEY", opts.CryptoKeyPath)
-	return opts
+	if raw := envString("TOKEN_TTL", ""); raw != "" {
+		secs, err := parseDurationSeconds(raw)
+		if err != nil {
+			return opts, fmt.Errorf("TOKEN_TTL: %w", err)
+		}
+		opts.TokenTTL = time.Duration(secs) * time.Second
+	}
+	return opts, nil
 }
 
 // DefaultServerOptions returns server options from environment with code fallbacks.
-// Env: ADDRESS, DATABASE_DSN, JWT_SECRET, LOG_LEVEL, CRYPTO_KEY.
-func DefaultServerOptions() ServerOptions {
+// Env: ADDRESS, DATABASE_DSN, JWT_SECRET, DATA_ENCRYPTION_KEY, LOG_LEVEL, CRYPTO_KEY, TOKEN_TTL.
+func DefaultServerOptions() (ServerOptions, error) {
 	opts := ServerOptions{
 		Address:   defaultServerAddress,
 		LogLevel:  defaultServerLogLevel,
 		JWTSecret: defaultJWTSecret,
+		TokenTTL:  defaultTokenTTL,
 	}
 	return ApplyServerEnv(opts)
 }

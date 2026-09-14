@@ -77,11 +77,11 @@ func TestPostgresStorage_UserAndSecretCRUD(t *testing.T) {
 	require.NoError(t, store.CreateSecret(ctx, secret))
 	require.NotEmpty(t, secret.ID)
 
-	list, err := store.ListSecrets(ctx, user.ID, "")
+	list, err := storage.ListSecrets(ctx, store, user.ID, "")
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 
-	typed, err := store.ListSecrets(ctx, user.ID, models.SecretTypeLoginPassword)
+	typed, err := storage.ListSecrets(ctx, store, user.ID, models.SecretTypeLoginPassword)
 	require.NoError(t, err)
 	require.Len(t, typed, 1)
 
@@ -130,7 +130,7 @@ func TestPostgresStorage_AllSecretTypes(t *testing.T) {
 		require.NoError(t, store.CreateSecret(ctx, s))
 	}
 
-	list, err := store.ListSecrets(ctx, user.ID, "")
+	list, err := storage.ListSecrets(ctx, store, user.ID, "")
 	require.NoError(t, err)
 	require.Len(t, list, 3)
 }
